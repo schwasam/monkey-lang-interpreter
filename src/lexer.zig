@@ -180,7 +180,6 @@ test "lexer test 3" {
         \\
         \\let result = add(five, ten);
     ;
-    try std.testing.expect(input[0] == 'l');
 
     // zig fmt: off
     const expected_tokens = [_]Token{ 
