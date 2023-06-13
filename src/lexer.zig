@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Token = union(enum) {
+pub const Token = union(enum) {
     // special
     illegal: u8,
     eof,
@@ -69,9 +69,7 @@ pub const Lexer = struct {
         return lexer;
     }
 
-    // const input = "=+(){},;";
-
-    fn nextToken(self: *Self) Token {
+    pub fn nextToken(self: *Self) Token {
         self.skipWhitespace();
         const token: Token = switch (self.char) {
             '=' => equal: {
