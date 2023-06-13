@@ -1,95 +1,94 @@
 const std = @import("std");
 
-pub const Token = union(enum) {
+const Token = union(enum) {
     // special
     illegal: u8,
-    eof: void,
+    eof,
 
     // identifiers and literals
-    ident: []const u8,
-    int: i64,
+    identifier: []const u8,
+    integer: i64,
 
     // operators
-    assign: void,
-    plus: void,
-    minus: void,
-    bang: void,
-    asterisk: void,
-    slash: void,
-    less_than: void,
-    greater_than: void,
-    equal: void,
-    not_equal: void,
+    assign, // =
+    plus, // +
+    minus, // -
+    bang, // !
+    asterisk, // *
+    slash, // /
+    less_than, // <
+    greater_than, // >
+    equal, // ==
+    not_equal, // !=
 
     // delimiters
-    comma: void,
-    semicolon: void,
-    lparen: void,
-    rparen: void,
-    lbrace: void,
-    rbrace: void,
+    comma, // ,
+    semicolon, // ;
+    left_parenthesis, // (
+    right_parenthesis, // )
+    left_brace, // {
+    right_brace, // }
 
     // keywords
-    function: void,
-    let: void,
-    true: void,
-    false: void,
-    if_: void,
-    else_: void,
-    return_: void,
+    let_, // let
+    function_, // fn
+    if_, // if
+    else_, // else
+    true_, // true
+    false_, // false
+    return_, // return
+
+    fn keyword(ident: []const u8) ?Token {
+        const map = std.ComptimeStringMap(Token, .{
+            .{ "let", .let_ },
+            .{ "fn", .function_ },
+            .{ "if", .if_ },
+            .{ "else", .else_ },
+            .{ "true", .true_ },
+            .{ "false", .false_ },
+            .{ "return", .return_ },
+        });
+
+        return map.get(ident);
+    }
 };
 
 pub const Lexer = struct {
     const Self = @This();
+    const NUL: u8 = 0; // ASCII NUL
 
-    // zig fmt: off
-    const Keywords = std.ComptimeStringMap(Token, .{
-        .{ "fn", .function },
-        .{ "let", .let },
-        .{ "true", .true },
-        .{ "false", .false },
-        .{ "if", .if_ },
-        .{ "else", .else_ },
-        .{ "return", .return_ },
-    });
-    // zig fmt: on
-
-    input: []const u8 = undefined, // input / program code
-    position: usize = 0, // current position in input (points to current char)
-    read_position: usize = 0, // current reading position in input (after current char)
-    ch: u8 = undefined, // current char under examination
+    position: u64 = 0,
+    read_position: u64 = 0,
+    char: u8 = NUL,
+    input: []const u8 = undefined,
 
     pub fn init(input: []const u8) Self {
-        var self = Self{ .input = input };
-        readCharacter(&self);
+        var lexer = Self{ .input = input };
+        lexer.readCharacter();
 
-        return self;
+        return lexer;
     }
 
-    pub fn nextToken(self: *Self) Token {
-        var skipRead = false;
+    // const input = "=+(){},;";
 
-        skipWhitespace(self);
-
-        var token: Token = undefined;
-        token = switch (self.ch) {
-            '=' => {
-                if (peekCharacter(self) == '=') {
-                    readCharacter(self);
-                    return .equal;
-                } else {
-                    return .assign;
+    fn nextToken(self: *Self) Token {
+        self.skipWhitespace();
+        const token: Token = switch (self.char) {
+            '=' => equal: {
+                if (self.peekCharacter() == '=') {
+                    self.readCharacter();
+                    break :equal .equal;
                 }
+                break :equal .assign;
             },
             '+' => .plus,
             '-' => .minus,
-            '!' => {
-                if (peekCharacter(self) == '=') {
-                    readCharacter(self);
-                    return .not_equal;
-                } else {
-                    return .bang;
+            '!' => not_equal: {
+                if (self.peekCharacter() == '=') {
+                    self.readCharacter();
+                    break :not_equal .not_equal;
                 }
+                break :not_equal .bang;
             },
             '*' => .asterisk,
             '/' => .slash,
@@ -97,64 +96,56 @@ pub const Lexer = struct {
             '>' => .greater_than,
             ',' => .comma,
             ';' => .semicolon,
-            '(' => .lparen,
-            ')' => .rparen,
-            '{' => .lbrace,
-            '}' => .rbrace,
-            0 => .eof,
-            else => |c| {
-                if (isLetter(c)) {
-                    var id = readIdentifier(self);
-                    var tk = lookupIdentifier(id);
-                    skipRead = true;
-                    return tk;
+            '(' => .left_parenthesis,
+            ')' => .right_parenthesis,
+            '{' => .left_brace,
+            '}' => .right_brace,
+            NUL => .eof,
+            else => |char| {
+                if (isLetter(char)) {
+                    const id = self.readIdentifier();
+                    if (Token.keyword(id)) |tok| {
+                        return tok;
+                    }
+                    return Token{ .identifier = id };
                 }
 
-                if (isDigit(c)) {
-                    var num = readNumber(self);
-                    var tk = Token{ .int = num };
-                    skipRead = true;
-                    return tk;
+                if (isDigit(char)) {
+                    const int = self.readInteger() catch {
+                        return Token{ .illegal = char };
+                    };
+                    return Token{ .integer = int };
                 }
 
-                return Token{ .illegal = c };
+                return Token{ .illegal = char };
             },
         };
-
-        if (!skipRead) {
-            readCharacter(self);
-        }
+        self.readCharacter();
 
         return token;
     }
 
-    pub fn skipWhitespace(self: *Self) void {
-        while (isWhitespace(self.ch)) {
-            readCharacter(self);
+    fn peekCharacter(self: *Self) u8 {
+        if (self.read_position >= self.input.len) {
+            return NUL;
         }
+
+        return self.input[self.read_position];
     }
 
-    pub fn readCharacter(self: *Self) void {
+    fn readCharacter(self: *Self) void {
         if (self.read_position >= self.input.len) {
-            self.ch = 0;
+            self.char = NUL;
         } else {
-            self.ch = self.input[self.read_position];
+            self.char = self.input[self.read_position];
         }
         self.position = self.read_position;
         self.read_position += 1;
     }
 
-    pub fn peekCharacter(self: *Self) u8 {
-        if (self.read_position >= self.input.len) {
-            return 0;
-        } else {
-            return self.input[self.read_position];
-        }
-    }
-
     pub fn readIdentifier(self: *Self) []const u8 {
         var start_idx = self.position;
-        while (isLetter(self.ch)) {
+        while (isLetter(self.char)) {
             readCharacter(self);
         }
         var end_idx = self.position;
@@ -162,28 +153,15 @@ pub const Lexer = struct {
         return self.input[start_idx..end_idx];
     }
 
-    pub fn lookupIdentifier(identifier: []const u8) Token {
-        var keyword = Keywords.get(identifier);
-        if (keyword == null) {
-            return Token{ .ident = identifier };
+    fn readInteger(self: *Self) !i64 {
+        const position = self.position;
+        while (isDigit(self.char)) {
+            self.readCharacter();
         }
+        const buffer = self.input[position..self.position];
+        const int = try std.fmt.parseInt(i64, buffer, 10);
 
-        return keyword.?;
-    }
-
-    pub fn readNumber(self: *Self) i64 {
-        var start_idx = self.position;
-        while (isDigit(self.ch)) {
-            readCharacter(self);
-        }
-        var end_idx = self.position;
-        var number = std.fmt.parseInt(i64, self.input[start_idx..end_idx], 10) catch -1;
-
-        return number;
-    }
-
-    pub fn isWhitespace(ch: u8) bool {
-        return (ch == ' ') or (ch == '\t') or (ch == '\n') or (ch == '\r');
+        return int;
     }
 
     pub fn isLetter(ch: u8) bool {
@@ -193,11 +171,29 @@ pub const Lexer = struct {
     pub fn isDigit(ch: u8) bool {
         return ('0' <= ch and ch <= '9');
     }
+
+    fn skipWhitespace(self: *Self) void {
+        while (std.ascii.isWhitespace(self.char)) {
+            self.readCharacter();
+        }
+    }
 };
 
-test "lexer test 1" {
+test "lexer test 1: some operators and delimiters" {
     const input = "=+(){},;";
-    const expected_tokens = [_]Token{ .assign, .plus, .lparen, .rparen, .lbrace, .rbrace, .comma, .semicolon, .eof };
+
+    // zig fmt: off
+    const expected_tokens = [_]Token{
+        .assign,
+        .plus,
+        .left_parenthesis,
+        .right_parenthesis,
+        .left_brace,
+        .right_brace,
+        .comma,
+        .semicolon,
+        .eof };
+    // zig fmt: on
 
     var lexer = Lexer.init(input);
 
@@ -208,39 +204,26 @@ test "lexer test 1" {
     }
 }
 
-test "lexer test 2" {
-    const input = "====)));";
-    const expected_tokens = [_]Token{ .assign, .assign, .assign, .assign, .rparen, .rparen, .rparen, .semicolon, .eof };
-
-    var lexer = Lexer.init(input);
-
-    for (expected_tokens) |expected_token| {
-        var token = lexer.nextToken();
-
-        try std.testing.expectEqualDeep(expected_token, token);
-    }
-}
-
-test "lexer test 3" {
+test "lexer test 2: simple program" {
     const input =
-        \\let five = 5;
-        \\let ten = 10;
+        \\ let five = 5;
+        \\ let ten = 10;
         \\
-        \\let add = fn(x, y) {
-        \\  x + y;
-        \\};
+        \\ let add = fn(x, y) {
+        \\   x + y;
+        \\ };
         \\
-        \\let result = add(five, ten);
+        \\ let result = add(five, ten);
     ;
 
     // zig fmt: off
-    const expected_tokens = [_]Token{ 
-        .let, Token{ .ident = "five" }, .assign, Token{ .int = 5 }, .semicolon, // let five = 5;
-        .let, Token{ .ident = "ten" }, .assign, Token{ .int = 10 }, .semicolon, // let ten = 10;
-        .let, Token{ .ident= "add" }, .assign, .function, .lparen, Token{ .ident = "x" }, .comma, Token{ .ident = "y" }, .rparen, .lbrace, // let add = fn(x, y) {
-        Token{ .ident = "x" }, .plus, Token{ .ident = "y" }, .semicolon, // x + y;
-        .rbrace, .semicolon, // };
-        .let, Token{ .ident = "result" }, .assign, Token{ .ident = "add" }, .lparen, Token{ .ident = "five" }, .comma, Token{ .ident = "ten" }, .rparen, .semicolon, // let result = add(five, ten);
+    const expected_tokens = [_]Token{
+        .let_, Token{ .identifier = "five" }, .assign, Token{ .integer = 5 }, .semicolon, // let five = 5;
+        .let_, Token{ .identifier = "ten" }, .assign, Token{ .integer = 10 }, .semicolon, // let ten = 10;
+        .let_, Token{ .identifier = "add" }, .assign, .function_, .left_parenthesis, Token{ .identifier = "x" }, .comma, Token{ .identifier = "y" }, .right_parenthesis, .left_brace, // let add = fn(x, y) {
+        Token{ .identifier = "x" }, .plus, Token{ .identifier = "y" }, .semicolon, // x + y;
+        .right_brace, .semicolon, // };
+        .let_, Token{ .identifier = "result" }, .assign, Token{ .identifier = "add" }, .left_parenthesis, Token{ .identifier = "five" }, .comma, Token{ .identifier = "ten" }, .right_parenthesis, .semicolon, // let result = add(five, ten);
         .eof
     };
     // zig fmt: on
@@ -254,16 +237,16 @@ test "lexer test 3" {
     }
 }
 
-test "lexer test 4" {
+test "lexer test 3: miscellaneous" {
     const input =
         \\!-/*5;
         \\5 < 10 > 5;
     ;
 
     // zig fmt: off
-    const expected_tokens = [_]Token{ 
-        .bang, .minus, .slash, .asterisk, Token{ .int = 5 }, .semicolon, // !-/*5;
-        Token{ .int = 5 }, .less_than, Token{ .int = 10 }, .greater_than, Token{ .int = 5 }, .semicolon, // 5 < 10 > 5;
+    const expected_tokens = [_]Token{
+        .bang, .minus, .slash, .asterisk, Token{ .integer = 5 }, .semicolon, // !-/*5;
+        Token {.integer = 5}, .less_than, Token{ .integer = 10 }, .greater_than, Token{ .integer = 5 }, .semicolon, // 5 < 10 > 5;
         .eof
     };
     // zig fmt: on
@@ -277,22 +260,22 @@ test "lexer test 4" {
     }
 }
 
-test "lexer test 5" {
+test "lexer test 4: conditionals" {
     const input =
-        \\if (5 < 10) {
+        \\ if (5 < 10) {
         \\  return true;
-        \\} else {
+        \\ } else {
         \\  return false;
-        \\}
+        \\ }
     ;
 
     // zig fmt: off
-    const expected_tokens = [_]Token{ 
-        .if_, .lparen, Token{ .int = 5 }, .less_than, Token{ .int = 10 }, .rparen, .lbrace, // if (5 < 10) {
-        .return_, .true, .semicolon, // return true;
-        .rbrace, .else_, .lbrace, // } else {
-        .return_, .false, .semicolon, // return false;
-        .rbrace, // }
+    const expected_tokens = [_]Token{
+        .if_, .left_parenthesis, Token{ .integer = 5 }, .less_than, Token{ .integer = 10 }, .right_parenthesis, .left_brace, // if (5 < 10) {
+        .return_, .true_, .semicolon, // return true;
+        .right_brace, .else_, .left_brace, // } else {
+        .return_, .false_, .semicolon, // return false;
+        .right_brace, // }
         .eof
     };
     // zig fmt: on
@@ -306,17 +289,20 @@ test "lexer test 5" {
     }
 }
 
-test "lexer test 6" {
-    const input =
-        \\10 == 10;
-        \\10 != 9;
-    ;
+test "lexer test 5: one letter operators" {
+    const input = "=+-!*/<>";
 
     // zig fmt: off
-    const expected_tokens = [_]Token{ 
-        Token{ .int = 10 }, .equal, Token{ .int = 10 }, .semicolon, // 10 == 10;
-        Token{ .int = 10 }, .not_equal, Token{ .int = 9 }, .semicolon, // 10 != 9;
-        .eof
+    const expected_tokens = [_]Token{
+        .assign,
+        .plus,
+        .minus,
+        .bang,
+        .asterisk,
+        .slash,
+        .less_than,
+        .greater_than,
+        .eof,
     };
     // zig fmt: on
 
@@ -329,4 +315,73 @@ test "lexer test 6" {
     }
 }
 
-// TODO: continue with page 26ff
+test "lexer test 6: two letter operators" {
+    const input = "==!= == !=";
+
+    // zig fmt: off
+    const expected_tokens = [_]Token{
+        .equal,
+        .not_equal,
+        .equal,
+        .not_equal,
+        .eof,
+    };
+    // zig fmt: on
+
+    var lexer = Lexer.init(input);
+
+    for (expected_tokens) |expected_token| {
+        var token = lexer.nextToken();
+
+        try std.testing.expectEqualDeep(expected_token, token);
+    }
+}
+
+test "lexer test 7: delimiters" {
+    const input = ",;(){}";
+
+    // zig fmt: off
+    const expected_tokens = [_]Token{
+        .comma,
+        .semicolon,
+        .left_parenthesis,
+        .right_parenthesis,
+        .left_brace,
+        .right_brace,
+        .eof,
+    };
+    // zig fmt: on
+
+    var lexer = Lexer.init(input);
+
+    for (expected_tokens) |expected_token| {
+        var token = lexer.nextToken();
+
+        try std.testing.expectEqualDeep(expected_token, token);
+    }
+}
+
+test "lexer test 8: keywords" {
+    const input = "let fn if else true false return";
+
+    // zig fmt: off
+    const expected_tokens = [_]Token{
+        .let_,
+        .function_,
+        .if_,
+        .else_,
+        .true_,
+        .false_,
+        .return_,
+        .eof,
+    };
+    // zig fmt: on
+
+    var lexer = Lexer.init(input);
+
+    for (expected_tokens) |expected_token| {
+        var token = lexer.nextToken();
+
+        try std.testing.expectEqualDeep(expected_token, token);
+    }
+}
